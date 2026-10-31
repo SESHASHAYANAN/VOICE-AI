@@ -140,6 +140,83 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
     )
 
 
+@router.post("/demo-login", response_model=TokenResponse)
+async def demo_login(db: AsyncSession = Depends(get_db)):
+    """Automatic login or creation of demo account with pre-seeded business data."""
+    email = "demo@businessvoice.ai"
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        user = User(
+            email=email,
+            hashed_password=hash_password("demo123456"),
+            full_name="Rajesh Patel",
+            phone="+919876543200",
+        )
+        db.add(user)
+        await db.flush()
+
+        org = Organization(
+            name="Apex Retail & Logistics",
+            slug="apex-retail-logistics",
+            business_type="retail",
+            industry="E-commerce & Logistics",
+            description="Leading D2C and omnichannel retail logistics in Mumbai",
+            phone="+919876543200",
+            address="BKC Complex, Bandra East, Mumbai, Maharashtra, India",
+        )
+        db.add(org)
+        await db.flush()
+
+        membership = OrganizationMembership(
+            user_id=user.id,
+            organization_id=org.id,
+            role=UserRole.OWNER,
+        )
+        db.add(membership)
+        await db.flush()
+
+        # Create default agent
+        from app.models.agent import Agent
+        default_agent = Agent(
+            organization_id=org.id,
+            name="Apex Voice Operations Agent",
+            description="Autonomous business operations & calling agent",
+            agent_type="general",
+            personality="Professional, empathetic, and action-oriented",
+            language="en",
+            languages_supported=["en", "hi"],
+            system_prompt="You are the AI operations representative for Apex Retail & Logistics. Handle orders, delivery inquiries, supplier reorders, and customer support with high professionalism.",
+            greeting_message="Hello! This is Apex AI Voice Assistant. How can I assist you with your business today?",
+        )
+        db.add(default_agent)
+        await db.flush()
+
+        # Seed demo business data
+        await seed_demo_data(db, org.id)
+    else:
+        membership_res = await db.execute(
+            select(OrganizationMembership).where(OrganizationMembership.user_id == user.id).limit(1)
+        )
+        membership = membership_res.scalar_one_or_none()
+
+    token_data = {"sub": str(user.id)}
+    if membership:
+        token_data["org_id"] = str(membership.organization_id)
+        token_data["role"] = membership.role.value
+
+    access_token = create_access_token(token_data)
+    refresh_token = create_refresh_token(token_data)
+
+    return TokenResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        user=UserResponse.model_validate(user),
+    )
+
+
+
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh_token(data: RefreshTokenRequest, db: AsyncSession = Depends(get_db)):
     """Refresh access token."""
